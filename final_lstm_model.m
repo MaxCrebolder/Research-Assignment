@@ -2,7 +2,7 @@ clear; clc; close all;
 
 %% Configuration
 rng(42);
-file_path       = 'C:/Users/maxcr/OneDrive/Documenten/Research assignment/Data/Site15_29m.xlsx';
+file_path       = %fill in the file path here
 parameters      = {'s_wht','mean_fr','wind_speed'};
 years           = 2001:2010;
 training_years  = 2001:2008;
