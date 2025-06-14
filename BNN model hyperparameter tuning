@@ -1,0 +1,127 @@
+clear; clc; close all;
+
+file_path  = "/Users/maxcrebolder/Documents/Site15_29m.xlsx";
+parameters = {'s_wht','mean_fr','wind_speed'};
+
+windowSizes = [48 96 149];
+hidden1     = [16 32 64 128];
+hidden2     = [16 32 64];
+dropProbs   = [0.01 0.02 0.04 0.06 0.08];
+nEpochsGrid = [40 60 80];
+Nmc         = 15;
+
+valFrac = 0.2; % 20% validation
+
+outDir = fullfile(pwd, 'bnn_tuning_output');
+if ~exist(outDir,'dir'), mkdir(outDir); end
+
+% Load 2006 data, sample every 3rd value
+tbl = readtable(file_path, 'Sheet', '2006');
+allData = [];
+for i = 1:numel(parameters)
+    var = parameters{i};
+    if ismember(var, tbl.Properties.VariableNames)
+        data = fillmissing(tbl.(var), 'linear');
+    else
+        data = nan(height(tbl), 1);
+    end
+    allData(:,i) = data(1:3:end);
+end
+
+for v = 1:numel(parameters)
+    var = parameters{v};
+    fprintf('\n****** Target: %s ******\n', var);
+
+    dataNorm = mapminmax(allData(:,v)', 0, 1)';
+    res = struct('win', {}, 'h1', {}, 'h2', {}, 'p', {}, 'epochs', {}, 'rmse', {}, 'seconds', {});
+    comb = 0;
+
+    for win = windowSizes
+        [X, Y] = createANNData(dataNorm, win);
+        nSamples = size(X,1);
+        nv = round(valFrac * nSamples);
+        Xtr = X(1:end-nv, :);    Ytr = Y(1:end-nv);
+        Xva = X(end-nv+1:end,:); Yva = Y(end-nv+1:end);
+
+        for h1 = hidden1
+            for h2 = hidden2
+                for p = dropProbs
+                    for ne = nEpochsGrid
+                        comb = comb + 1;
+                        fprintf('(%d) win=%d h1=%d h2=%d p=%.3f ep=%d ...', ...
+                            comb, win, h1, h2, p, ne);
+                        tic;
+                        layers = [
+                            featureInputLayer(win)
+                            fullyConnectedLayer(h1)
+                            reluLayer
+                            dropoutLayer(p)
+                            fullyConnectedLayer(h2)
+                            reluLayer
+                            fullyConnectedLayer(1)
+                            regressionLayer
+                        ];
+                        opts = trainingOptions('adam', ...
+                            'MaxEpochs', ne, ...
+                            'MiniBatchSize', 128, ...
+                            'Shuffle','every-epoch', ...
+                            'Verbose',false);
+
+                        net = trainNetwork(Xtr, Ytr, layers, opts);
+
+                        preds = zeros(size(Xva,1), Nmc);
+                        for m = 1:Nmc
+                            preds(:,m) = predict(net, Xva);
+                        end
+                        Y_pred = mean(preds, 2);
+                        rmse = sqrt(mean((Yva - Y_pred).^2));
+                        secs = toc;
+                        fprintf(' RMSE %.4f   %.1fs\n', rmse, secs);
+
+                        res(end+1,1) = struct('win',win,'h1',h1,'h2',h2,'p',p, ...
+                            'epochs',ne,'rmse',rmse,'seconds',secs);
+                    end
+                end
+            end
+        end
+    end
+
+    tab = struct2table(res);
+    csvFile = fullfile(outDir, sprintf('results_%s.csv',var));
+    writetable(tab, csvFile);
+    makeReportPlots(var, tab, outDir);
+end
+
+fprintf('\nAll done. Results saved in %s.\n', outDir);
+
+%------------------------ Local functions ---------------------------------
+function [X, Y] = createANNData(series, windowSize)
+    n = length(series);
+    X = zeros(n - windowSize, windowSize);
+    Y = zeros(n - windowSize, 1);
+    for i = 1:(n - windowSize)
+        X(i,:) = series(i : i+windowSize-1);
+        Y(i)   = series(i+windowSize);
+    end
+end
+
+function makeReportPlots(var, tab, outDir)
+    figure('Visible','off');
+    gscatter(tab.win, tab.rmse, tab.h1);
+    xlabel('Window size (h)'); ylabel('Validation RMSE');
+    title(sprintf('%s – Window size sweep', var));
+    saveas(gcf, fullfile(outDir, sprintf('Fig_%s_Window.png',var)));
+
+    figure('Visible','off');
+    gscatter(tab.p, tab.rmse, tab.h1);
+    xlabel('Dropout probability p'); ylabel('Validation RMSE');
+    title(sprintf('%s – Dropout sweep', var));
+    saveas(gcf, fullfile(outDir, sprintf('Fig_%s_Dropout.png',var)));
+
+    figure('Visible','off');
+    gscatter(tab.h1, tab.rmse, tab.h2);
+    xlabel('Hidden units layer 1'); ylabel('Validation RMSE');
+    title(sprintf('%s – Hidden width sweep', var));
+    saveas(gcf, fullfile(outDir, sprintf('Fig_%s_Hidden.png',var)));
+    close all force;
+end
