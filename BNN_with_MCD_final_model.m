@@ -22,26 +22,26 @@ rolling_window_size = rolling_weeks * hours_per_week;
 
 modelConfigs = struct;
 
-modelConfigs.s_wht.windowSize   = 149;
-modelConfigs.s_wht.hiddenLayer1 = 64;
-modelConfigs.s_wht.hiddenLayer2 = 32;
-modelConfigs.s_wht.dropoutRate  = 0.04;
+modelConfigs.s_wht.windowSize   = 48;
+modelConfigs.s_wht.hiddenLayer1 = 128;
+modelConfigs.s_wht.hiddenLayer2 = 64;
+modelConfigs.s_wht.dropoutRate  = 0.08;
 modelConfigs.s_wht.mcIterations = 15;
 modelConfigs.s_wht.initialEpochs= 80;
 modelConfigs.s_wht.refitEpochs  = 40;
 
-modelConfigs.mean_fr.windowSize   = 149;
-modelConfigs.mean_fr.hiddenLayer1 = 64;
-modelConfigs.mean_fr.hiddenLayer2 = 32;
-modelConfigs.mean_fr.dropoutRate  = 0.008;
+modelConfigs.mean_fr.windowSize   = 48;
+modelConfigs.mean_fr.hiddenLayer1 = 128;
+modelConfigs.mean_fr.hiddenLayer2 = 64;
+modelConfigs.mean_fr.dropoutRate  = 0.01;
 modelConfigs.mean_fr.mcIterations = 15;
 modelConfigs.mean_fr.initialEpochs= 80;
 modelConfigs.mean_fr.refitEpochs  = 40;
 
 modelConfigs.wind_speed.windowSize   = 48;
-modelConfigs.wind_speed.hiddenLayer1 = 64;
-modelConfigs.wind_speed.hiddenLayer2 = 32;
-modelConfigs.wind_speed.dropoutRate  = 0.045;
+modelConfigs.wind_speed.hiddenLayer1 = 128;
+modelConfigs.wind_speed.hiddenLayer2 = 16;
+modelConfigs.wind_speed.dropoutRate  = 0.08;
 modelConfigs.wind_speed.mcIterations = 15;
 modelConfigs.wind_speed.initialEpochs= 80;
 modelConfigs.wind_speed.refitEpochs  = 40;
