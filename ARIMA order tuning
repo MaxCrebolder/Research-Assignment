@@ -1,0 +1,69 @@
+clear; clc; format compact;
+
+filePath   = '/Users/maxcrebolder/Documents/Site15_29m.xlsx';
+years      = 2001:2010;
+vars       = {'s_wht','mean_fr','wind_speed'};
+
+figDir = fullfile('figures','3_5_1');
+if ~exist(figDir,'dir'); mkdir(figDir); end
+
+fprintf('Loading hourly data ...\n');
+allSeries = struct();
+for v = vars
+    allSeries.(v{1}) = [];
+end
+
+for y = years
+    try
+        T = readtable(filePath, 'Sheet', num2str(y));
+    catch
+        error('Cannot read sheet %d.', y);
+    end
+    for v = vars
+        vn = v{1};
+        if ismember(vn, T.Properties.VariableNames)
+            data = fillmissing(T.(vn),'linear');
+        else
+            warning('Variable %s missing in %d – filling NaNs.', vn, y);
+            data = nan(height(T),1);
+        end
+        allSeries.(vn) = [allSeries.(vn); data];
+    end
+end
+
+lags = 48;
+arimaCutoffs = [2 0 3];
+
+f = figure('Units','centimeters','Position',[2 2 16 18]);
+for i = 1:numel(vars)
+    vn   = vars{i};
+    data = allSeries.(vn);
+
+    subplot(numel(vars),2,(i-1)*2+1)
+    autocorr(data,'NumLags',lags);
+    title(sprintf('ACF – %s', strrep(vn,'_','\_')));
+    hold on; xline(arimaCutoffs(1),'--r'); xline(arimaCutoffs(3),'--b'); hold off
+
+    subplot(numel(vars),2,(i-1)*2+2)
+    parcorr(data,'NumLags',lags);
+    title(sprintf('PACF – %s', strrep(vn,'_','\_')));
+    hold on; xline(arimaCutoffs(1),'--r'); xline(arimaCutoffs(3),'--b'); hold off
+
+    [h,pStat] = adftest(data,'lags',0);
+    fprintf('ADF for %s:  p = %.4f  ->  %s\n', vn, pStat, ...
+        ternary(h,'stationary (reject H0)','non-stationary'));
+end
+sgtitle('ACF & PACF for each variable with ARIMA(2,0,3) cut-offs');
+
+set(findall(f,'Type','axes'),'FontSize',8);
+for L = findobj(f,'Type','Legend')
+    L.FontSize = L.FontSize/2;
+end
+
+savefig(f, fullfile(figDir,'fig1_acf_pacf.fig'));
+exportgraphics(f, fullfile(figDir,'fig1_acf_pacf.png'), 'Resolution',300);
+fprintf('\nFigure saved to %s\n', fullfile(figDir,'fig1_acf_pacf.png'));
+
+function out = ternary(cond,a,b)
+    if cond, out = a; else, out = b; end
+end
