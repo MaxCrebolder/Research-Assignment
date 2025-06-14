@@ -1,0 +1,91 @@
+clear; clc; format compact;
+
+filePath = '/Users/maxcrebolder/Documents/Site15_29m.xlsx';
+vars     = {'s_wht','mean_fr','wind_speed'};
+year     = 2006;
+step     = 3;
+
+figDir = fullfile('figures','3_5_1');  if ~exist(figDir,'dir'), mkdir(figDir); end
+tabDir = fullfile('tables');           if ~exist(tabDir,'dir'), mkdir(tabDir); end
+
+T = readtable(filePath, 'Sheet', num2str(year));
+allSeries = struct();
+for v = vars
+    vn = v{1};
+    ser = fillmissing(T.(vn),'linear');
+    allSeries.(vn) = ser(1:step:end);
+end
+
+windowSize = struct('s_wht',149,'mean_fr',149,'wind_speed',48);
+neuronList = [3 5 10 15 20 25];
+resultsTbl = table();
+
+for v = vars
+    vn = v{1};
+    [X,Y] = createANNData(allSeries.(vn), windowSize.(vn));
+    idxSplit = floor(0.8*size(X,1));
+    Xtr = X(1:idxSplit,:);  Ytr = Y(1:idxSplit);
+    Xva = X(idxSplit+1:end,:); Yva = Y(idxSplit+1:end);
+
+    for n = neuronList
+        tic
+        net = feedforwardnet(n,'trainlm');
+        net.trainParam.showWindow = false;
+        net.trainParam.epochs     = 15;
+        net = train(net, Xtr', Ytr');
+        cpuMin = toc/60;
+        rmseVa = sqrt(mean((net(Xva') - Yva').^2));
+        resultsTbl = [resultsTbl; {vn, n, rmseVa, cpuMin}];
+    end
+end
+resultsTbl.Properties.VariableNames = {'variable','neurons','val_rmse','cpu_min'};
+writetable(resultsTbl, fullfile(tabDir,'table_1_neurons_rmse.csv'));
+
+colMap = lines(numel(vars));
+for i = 1:numel(vars)
+    vn = vars{i};
+    subT = resultsTbl(strcmp(resultsTbl.variable,vn),:);
+    figure('Units','centimeters','Position',[2 2 8 6]);
+    plot(subT.neurons, subT.val_rmse,'-o','Color',colMap(i,:), ...
+        'MarkerFaceColor',colMap(i,:), 'MarkerSize',5);
+    hold on;
+    chooseN = 5; if ~strcmp(vn,'s_wht'); chooseN = 15; end
+    chIdx = find(subT.neurons==chooseN,1);
+    scatter(subT.neurons(chIdx), subT.val_rmse(chIdx),60,'filled', ...
+        'MarkerFaceColor',colMap(i,:));
+    xlabel('Hidden neurons'); ylabel('Validation RMSE');
+    title(sprintf('Elbow – %s', strrep(vn,'_','\_')));
+    set(gca,'FontSize',8);
+    exportgraphics(gcf, fullfile(figDir, sprintf('elbow_%s.png', vn)), 'Resolution',300);
+end
+
+figure('Units','centimeters','Position',[2 2 10 7]); hold on;
+chosen = struct('s_wht',5,'mean_fr',15);
+for v = fieldnames(chosen)'
+    vn = v{1}; nHidden = chosen.(vn);
+    [X,Y] = createANNData(allSeries.(vn), windowSize.(vn));
+    idxSplit = floor(0.8*size(X,1));
+    Xtr = X(1:idxSplit,:); Ytr = Y(1:idxSplit);
+    net = feedforwardnet(nHidden,'trainlm');
+    net.trainParam.showWindow = false;
+    net.trainParam.epochs     = 120;
+    net.trainParam.max_fail   = 15;
+    [net,tr] = train(net, Xtr', Ytr');
+    plot(0:numel(tr.vperf)-1, sqrt(tr.vperf)', ...
+        'DisplayName', sprintf('%s (val)', strrep(vn,'_','\_')));
+end
+xlabel('Epoch'); ylabel('RMSE'); legend('Location','eastoutside');
+set(gca,'FontSize',8);
+exportgraphics(gcf, fullfile(figDir,'learning_curve.png'), 'Resolution',300);
+
+fprintf('\nCSV saved to   %s\n', fullfile(tabDir,'table_1_neurons_rmse.csv'));
+fprintf('Learning curve %s\n', fullfile(figDir,'learning_curve.png'));
+
+function [X, Y] = createANNData(series, window)
+    m = numel(series) - window;
+    X = zeros(m, window); Y = zeros(m,1);
+    for i = 1:m
+        X(i,:) = series(i:i+window-1);
+        Y(i)   = series(i+window);
+    end
+end
