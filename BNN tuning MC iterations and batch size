@@ -2,7 +2,7 @@ clear; clc; close all;
 if isempty(gcp('nocreate')), parpool('local'); end     
 
 %% 1.  SETTINGS
-filePath   = "/Users/maxcrebolder/Documents/Site15_29m.xlsx";  
+filePath   = %fill in the file path here 
 vars       = {'s_wht','mean_fr','wind_speed'};
 
 winSize    = 48;                
