@@ -1,7 +1,7 @@
 clc; close all; rng(42,'twister');                           % one reset
 
 %% USER SETTINGS (edit only here) ----------------------------------------
-file_path  = "/Users/maxcrebolder/Documents/Site15_29m.xlsx";
+file_path  = %fill in the file path here;
 target_var = "s_wht";                 % "s_wht" | "mean_fr" | "wind_speed"
 
 seq_len    = 48;                      % common look-back
