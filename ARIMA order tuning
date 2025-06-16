@@ -1,6 +1,6 @@
 clear; clc; format compact;
 
-filePath   = '/Users/maxcrebolder/Documents/Site15_29m.xlsx';
+filePath   = %fill in the file path here
 years      = 2001:2010;
 vars       = {'s_wht','mean_fr','wind_speed'};
 
