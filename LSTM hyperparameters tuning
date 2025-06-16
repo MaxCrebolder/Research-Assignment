@@ -1,0 +1,192 @@
+clc; close all; rng(42,'twister');                           % one reset
+
+%% USER SETTINGS (edit only here) ----------------------------------------
+file_path  = "/Users/maxcrebolder/Documents/Site15_29m.xlsx";
+target_var = "s_wht";                 % "s_wht" | "mean_fr" | "wind_speed"
+
+seq_len    = 48;                      % common look-back
+fig_dir    = fullfile("figures","3_5_3");
+if ~isfolder(fig_dir), mkdir(fig_dir); end
+
+%% LOAD & NORMALISE 2006 (every 3rd hour) ---------------------------------
+T = readtable(file_path,"Sheet","2006");  T = T(1:3:end,:);
+series = fillmissing(T.(target_var),"linear");
+[seriesN,~] = mapminmax(series',0,1);  seriesN = seriesN';
+n_obs  = numel(seriesN);
+fprintf("Data loaded: %d samples (3-hour step, normalised).\n",n_obs);
+
+%% COMMON SPLITS ----------------------------------------------------------
+cut   = floor(0.8*n_obs);             % 80 % train, 20 % val (Figures 1 & 3)
+train = seriesN(1:cut);
+val   = seriesN(cut-seq_len:end);
+
+%% ------------------------------------------------------------------------
+%% FIGURE 1  —  Entropy vs hidden units
+%% ------------------------------------------------------------------------
+hid_grid = 10:5:70;    clip_thres = 1;
+[Xtr,Ytr] = createLSTMData(train,seq_len);
+[Xv ,Yv ] = createLSTMData(val  ,seq_len);
+
+ent = zeros(numel(hid_grid),1);
+fprintf("\n[Fig-1] hidden-unit sweep:\n");
+for k = 1:numel(hid_grid)
+    h = hid_grid(k);
+    net = trainNetwork(Xtr,Ytr,lstmLayers(h), ...
+                       optsQuick(8,72,5e-4,clip_thres));
+    ent(k) = shannonEntropy(Yv - predict(net,Xv,'MiniBatchSize',96),20);
+    fprintf("  %3d units  H = %.3f\n",h,ent(k));
+end
+figure('Name','Fig-1'); plot(hid_grid,ent,'-o','LineWidth',1.2); grid on;
+xlabel('hidden units'); ylabel('Shannon entropy');
+title('entropy elbow');
+saveas(gcf,fullfile(fig_dir,'fig_hiddenUnits_entropy.png'));
+
+%% ------------------------------------------------------------------------
+%% FIGURE 2  —  Gradient-noise scale vs mini-batch
+%% ------------------------------------------------------------------------
+hid_units = 35;  batch_grid = [24 48 72 96];
+gns = zeros(size(batch_grid));
+fprintf("\n[Fig-2] mini-batch sweep:\n");
+for i = 1:numel(batch_grid)
+    gns(i) = gradNoiseScale(seriesN,seq_len,hid_units,batch_grid(i),clip_thres);
+    fprintf("  mb = %3d   GNS = %.4f\n",batch_grid(i),gns(i));
+end
+figure('Name','Fig-2'); semilogx(batch_grid,gns,'-s','LineWidth',1.4); grid on;
+xlabel('mini-batch size'); ylabel('gradient-noise scale');
+title('Gradient noise scale');
+saveas(gcf,fullfile(fig_dir,'fig_batchsize_noiseScale.png'));
+
+%% ------------------------------------------------------------------------
+%% FIGURE 3  —  Learning-rate triptych (first 200 iterations)
+%% ------------------------------------------------------------------------
+learn_rates = [1e-3 5e-4 1e-4];  epochs = 40;  mini_batch = 72;
+lossT = cell(1,3); lossV = cell(1,3);
+
+[Xtr3,Ytr3] = createLSTMData(train,seq_len);
+[Xv3 ,Yv3 ] = createLSTMData(val  ,seq_len);
+
+fprintf("\n[Fig-3] learning-rate curves:\n");
+for i = 1:3
+    lr = learn_rates(i);
+    opts = trainingOptions('adam','MaxEpochs',epochs, ...
+            'MiniBatchSize',mini_batch,'InitialLearnRate',lr, ...
+            'GradientThreshold',clip_thres,'Shuffle','once', ...
+            'ValidationData',{Xv3,Yv3},'Verbose',false);
+    fprintf("  η = %g  (%d epochs)\n",lr,epochs);
+    [~,info] = trainNetwork(Xtr3,Ytr3,lstmLayers(hid_units),opts);
+    lossT{i} = info.TrainingLoss;
+    lossV{i} = info.ValidationLoss;
+end
+figure('Name','Fig-3'); tl = tiledlayout(3,1,'TileSpacing','compact');
+for i = 1:3
+    nexttile;
+    plot(lossT{i},'LineWidth',1); hold on;
+    plot(lossV{i},'--','LineWidth',1); grid on;
+    xlabel('iteration'); ylabel('loss');
+    title(sprintf('\\eta = %g',learn_rates(i)));
+    xlim([0 200]); xticks(0:50:200);
+end
+title(tl,'Learning curves');
+saveas(gcf,fullfile(fig_dir,'fig_learningRate_tripanel.png'));
+
+%% ------------------------------------------------------------------------
+%% FIGURE 4  —  RMSE vs history length
+%% ------------------------------------------------------------------------
+hist_wks = [4 8 12 20];  hrs_week = 168;
+rmse = zeros(size(hist_wks));
+[Xv4 ,Yv4 ] = createLSTMData(val,seq_len);
+
+fprintf("\n[Fig-4] history-length sweep:\n");
+for i = 1:numel(hist_wks)
+    keep = hist_wks(i)*hrs_week + seq_len;
+    idx  = max(1,n_obs-keep):n_obs-1;
+    [Xt,Yt] = createLSTMData(seriesN(idx),seq_len);
+
+    net = trainNetwork(Xt,Yt,lstmLayers(hid_units), ...
+          optsQuick(15,72,5e-4,clip_thres));
+    preds = predict(net,Xv4,'MiniBatchSize',72);
+    rmse(i) = sqrt(mean((Yv4 - preds).^2));
+    fprintf("  %2d w  RMSE = %.4f\n",hist_wks(i),rmse(i));
+end
+figure('Name','Fig-4'); plot(hist_wks,rmse,'-o','LineWidth',1.4); grid on;
+xlabel('history (weeks)'); ylabel('validation RMSE');
+title('Pareto kne');
+saveas(gcf,fullfile(fig_dir,'fig_historyLength_RMSE.png'));
+
+%% ------------------------------------------------------------------------
+%% FIGURE 5  —  Grad-clip sanity trace
+%% ------------------------------------------------------------------------
+mini_batch = 72;  trace = [];
+[Xc,Yc] = createLSTMData(seriesN,seq_len);
+dlnet   = dlnetwork(lstmCore(hid_units));
+nB = floor(numel(Xc)/mini_batch); trace = zeros(nB,1);
+
+fprintf("\n[Fig-5] computing gradient-norm trace ...\n");
+for b = 1:nB
+    idx = (b-1)*mini_batch+1:b*mini_batch;
+    dlX = dlarray(cat(3,Xc{idx}),'CTB');
+    dlY = dlarray(Yc(idx)','CB');
+    [~,gradTbl] = dlfeval(@stepWithClip,dlnet,dlX,dlY,clip_thres);
+    trace(b) = sqrt(sum(cellfun(@(g)sum(extractdata(g).^2,"all"),gradTbl.Value)));
+end
+figure('Name','Fig-5'); plot(trace,'k','LineWidth',1); hold on;
+yline(clip_thres,'r','LineWidth',1.5); grid on;
+xlabel('iteration'); ylabel('‖∇θ‖₂');
+title('All peaks < clip = 1 → safe');
+saveas(gcf,fullfile(fig_dir,'fig_gradClipSanity.png'));
+
+fprintf("\nAll five figures saved to  %s\n",fig_dir);
+
+%% ========================================================================
+%%                              HELPER FUNCTIONS
+%% ========================================================================
+function [X,Y] = createLSTMData(v,lag)
+n = numel(v)-lag; X = cell(n,1); Y = zeros(n,1);
+for k = 1:n, X{k}=v(k:k+lag-1)'; Y(k)=v(k+lag); end
+end
+
+function layers = lstmLayers(h)
+layers = [sequenceInputLayer(1)
+          lstmLayer(h,'OutputMode','last')
+          fullyConnectedLayer(1)
+          regressionLayer];
+end
+
+function layers = lstmCore(h)
+layers = [sequenceInputLayer(1)
+          lstmLayer(h,'OutputMode','last')
+          fullyConnectedLayer(1)];
+end
+
+function opts = optsQuick(ep,mb,lr,clip)
+opts = trainingOptions('adam','MaxEpochs',ep,'MiniBatchSize',mb, ...
+       'InitialLearnRate',lr,'GradientThreshold',clip, ...
+       'Shuffle','once','Verbose',false);
+end
+
+function H = shannonEntropy(x,b)
+edges = linspace(min(x),max(x),b+1);
+p = histcounts(x,edges,'Normalization','probability'); p = p(p>0);
+H = -sum(p .* log2(p));
+end
+
+function gns = gradNoiseScale(vec,lag,h,mb,clip)
+[Xc,Yc] = createLSTMData(vec,lag); dlnet = dlnetwork(lstmCore(h));
+perm = randperm(numel(Xc)); nB = floor(numel(Xc)/mb); gpow = zeros(nB,1);
+for b = 1:nB
+    idx = perm((b-1)*mb+1:b*mb);
+    dlX = dlarray(cat(3,Xc{idx}),'CTB');
+    dlY = dlarray(Yc(idx)','CB');
+    [~,gTbl] = dlfeval(@stepWithClip,dlnet,dlX,dlY,clip);
+    gpow(b) = sum(cellfun(@(g)sum(extractdata(g).^2,"all"),gTbl.Value));
+end
+gns = var(gpow) / mean(gpow);
+end
+
+function [loss,gradTbl] = stepWithClip(net,X,Y,thr)
+pred = forward(net,X); loss = mse(pred,Y);
+gradTbl = dlgradient(loss,net.Learnables,'RetainData',true);
+for r = 1:height(gradTbl)
+    g = gradTbl.Value{r}; gradTbl.Value{r} = max(min(g,thr),-thr);
+end
+end
