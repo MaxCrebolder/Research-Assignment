@@ -1,0 +1,174 @@
+clear; clc; close all;
+if isempty(gcp('nocreate')), parpool('local'); end     
+
+%% 1.  SETTINGS
+filePath   = "/Users/maxcrebolder/Documents/Site15_29m.xlsx";  
+vars       = {'s_wht','mean_fr','wind_speed'};
+
+winSize    = 48;                
+hidden1    = 128;
+hidden2Vec = [64 64 16];        
+dropRate   = [0.08 0.01 0.08];
+initEpochs = 40;
+rng(7);
+
+figDir = fullfile('figures','3_5_2_subset2006');
+if ~exist(figDir,'dir'), mkdir(figDir); end
+
+%% 2.  LOAD 2006 & SUBSAMPLE
+disp('Loading 2006 data (every 3-rd hour) …');
+tbl2006 = readtable(filePath,'Sheet','2006');
+tbl2006 = tbl2006(1:3:end,:);                       
+nObs    = height(tbl2006);
+fprintf('   kept %d of 8760 rows (%.0f%%)\n', nObs, 100*nObs/8760);
+
+raw = struct();
+for v = vars
+    vn = v{1};
+    raw.(vn) = ismember(vn,tbl2006.Properties.VariableNames) ...
+             ? fillmissing(tbl2006.(vn),'linear') ...
+             : nan(nObs,1);
+end
+
+%% 3.  NORMALISE & SPLIT  (80 % train | 20 % test)
+splitIdx  = floor(0.80*nObs);
+trainData = struct();  testData = struct();  normPS = struct();
+
+for v = vars
+    vn = v{1};
+    [trainN,ps]     = mapminmax(raw.(vn)(1:splitIdx)',0,1); trainN = trainN';
+    testN           = mapminmax('apply',raw.(vn)(splitIdx+1:end)',ps)';
+    trainData.(vn)  = trainN;
+    testData.(vn)   = testN;
+    normPS.(vn)     = ps;
+end
+
+%% 4.  TRAIN ONE BNN PER VARIABLE
+disp('Training BNNs …');
+models = struct();
+
+for i = 1:numel(vars)
+    vn = vars{i};
+    [Xtr,Ytr] = createANNData(trainData.(vn),winSize);
+
+    layers = [
+        featureInputLayer(winSize,"Name","input")
+        fullyConnectedLayer(hidden1,"Name","fc1")  ; reluLayer
+        dropoutLayer(dropRate(i),"Name","drop1")
+        fullyConnectedLayer(hidden2Vec(i),"Name","fc2"); reluLayer
+        fullyConnectedLayer(1,"Name","fc3")
+        regressionLayer];
+
+    opts = trainingOptions('adam', ...
+        'MaxEpochs',initEpochs, 'MiniBatchSize',64, ...
+        'Shuffle','every-epoch', 'Verbose',false, ...
+        'ExecutionEnvironment','parallel');
+
+    fprintf('   %-10s … ', vn); tic
+    net = trainNetwork(Xtr,Ytr,layers,opts);
+    fprintf('done (%.1fs)\n', toc);
+
+    models.(vn) = struct('net',net,'rate',dropRate(i),'test',testData.(vn));
+end
+
+%% 5.  MC-DROPOUT CONVERGENCE  (Figure 1)
+Nmin = 6;  Nmax = 20;  iterVec = Nmin:Nmax;
+rmseCurve = zeros(numel(vars),numel(iterVec));
+
+for i = 1:numel(vars)
+    m    = models.(vars{i});
+    init = m.test(1:winSize);
+    for j = 1:numel(iterVec)
+        N = iterVec(j);
+        parfor k = 1:N, preds(:,k) = multiStepForecastDropout(m.net,init,numel(m.test),m.rate); end
+        rmseCurve(i,j) = sqrt( mean((mean(preds,2)-m.test).^2,'omitnan') );
+    end
+end
+meanRMSE = mean(rmseCurve,1);
+[~,idxMin] = min(meanRMSE);
+N_opt      = iterVec(idxMin);
+
+% ─ plot
+f1 = figure('Units','centimeters','Position',[2 2 16 9]);
+plot(iterVec,meanRMSE,'-o','LineWidth',1.2); hold on
+xline(N_opt,'--r','LineWidth',1);
+text(N_opt+0.4,meanRMSE(idxMin)*1.05,sprintf('N_{opt}=%d',N_opt), ...
+     'Color','r','FontSize',8);
+xlabel('MC iterations  N');  ylabel('Mean RMSE (normalised)');
+title('MC-dropout convergence — 2006 (every 3-rd hour)');
+grid on;  set(gca,'FontSize',8);
+exportgraphics(f1,fullfile(figDir,'fig_mc_convergence.png'),'Resolution',300);
+
+%% 6.  MINI-BATCH STUDY  (Figure 2)
+Bvec     = [16 32 64 128 256];
+lossVar  = zeros(size(Bvec));
+epochSec = zeros(size(Bvec));
+NBATCH   = 100;
+
+probeVar = vars{1};
+[Xprobe,Yprobe] = createANNData([trainData.(probeVar);testData.(probeVar)],winSize);
+ns = size(Xprobe,1);
+
+for b = 1:numel(Bvec)
+    B = Bvec(b);
+    batchLoss = zeros(NBATCH,1);
+    t0 = tic;
+    for k = 1:NBATCH
+        idx          = randperm(ns,B);
+        yp           = predict(models.(probeVar).net,Xprobe(idx,:));
+        batchLoss(k) = mean((yp-Yprobe(idx)).^2);
+    end
+    lossVar(b)  = var(batchLoss,1);
+    epochSec(b) = toc(t0)*ceil(ns/B)/NBATCH;
+    fprintf('   B=%3d  var=%.3e  epoch≈%.2fs\n',B,lossVar(b),epochSec(b));
+end
+
+relImpB = diff(lossVar)./lossVar(1:end-1);
+idxB    = find(relImpB>-0.05,1,'first');
+B_opt   = isempty(idxB) ? 128 : Bvec(idxB+1);
+
+% ─ plot
+f2 = figure('Units','centimeters','Position',[2 12 16 9]);
+yyaxis left,  semilogx(Bvec,lossVar,'-o','LineWidth',1.2), ylabel('Var(batch MSE)');
+yyaxis right, semilogx(Bvec,epochSec,'-s','LineWidth',1.2), ylabel('Pseudo-epoch time (s)');
+
+yMid = mean(ylim);                       % centre of right-hand axis
+xline(B_opt,'--r','LineWidth',1);
+text(B_opt*1.05,yMid,sprintf('B_{opt}=%d',B_opt), ...
+     'Color','r','Rotation',90,'VerticalAlignment','middle','FontSize',8);
+
+xlabel('Mini-batch size  B');
+title('Batch-size trade-off — 2006 (every 3-rd hour)');
+legend({'Loss-spread','Epoch time'},'FontSize',7,'Location','best');
+grid on; set(gca,'FontSize',8);
+exportgraphics(f2,fullfile(figDir,'fig_batch_tradeoff.png'),'Resolution',300);
+
+%% 7.  SUMMARY
+fprintf('\n───────── SUMMARY ─────────\n');
+fprintf('Optimal MC iterations  N_opt = %d\n', N_opt);
+fprintf('Optimal mini-batch     B_opt = %d\n', B_opt);
+fprintf('Figures saved to %s\n', figDir);
+
+%% 8.  HELPER FUNCTIONS
+function [X,Y] = createANNData(x,win)
+n = numel(x);  m = n-win;
+X = zeros(m,win);  Y = zeros(m,1);
+for i = 1:m, X(i,:) = x(i:i+win-1);  Y(i) = x(i+win); end
+end
+
+function YF = multiStepForecastDropout(net,initWin,steps,rate)
+win = numel(initWin);  YF = zeros(steps,1);  cur = initWin(:);
+for s = 1:steps
+    Yhat   = forwardDrop(net,cur,rate);
+    YF(s)  = max(Yhat,0);
+    cur    = [cur(2:end); YF(s)];
+end
+end
+
+function y = forwardDrop(net,x,rate)        
+if isrow(x), x = x'; end
+fc1 = net.Layers(2); z = max(fc1.Weights*x + fc1.Bias,0);
+z   = z .* (rand(size(z)) > rate);          
+fc2 = net.Layers(5); z = max(fc2.Weights*z + fc2.Bias,0);
+fc3 = net.Layers(7); y = fc3.Weights*z + fc3.Bias;
+end
