@@ -16,7 +16,7 @@ maxEpochsInitial  = 40;
 maxEpochsRefit    = 5;      
 numHiddenUnits    = 35;     
 miniBatchSize     = 72;     
-learnRate         = 0.0005; 
+learnRate         = 0.001; 
 
 hours_per_refit   = 5 * 24; 
 
