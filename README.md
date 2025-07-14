@@ -6,6 +6,6 @@ Other scripts in the GitHub are used during the hyper-parameter tuning phase of 
 **Prerequisites**
 
 MATLAB R2024a or newer with:
-Statistics & Machine Learning Toolbox
-Deep Learning Toolbox
-Parallel Computing Toolbox
+- Statistics & Machine Learning Toolbox
+- Deep Learning Toolbox
+- Parallel Computing Toolbox
