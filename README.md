@@ -11,6 +11,7 @@ MATLAB R2024a or newer with:
 - Parallel Computing Toolbox
 
 **Data**
+
 Each file loads a single Excel file in which all metocean measurements, of site 15, are combined in 10 different sheets. So sheet 1 will be 2001, sheet 2 the measurements from 2002 and so on. In this case only the Significant Wave Height (s_wht), the Mean Wave Frequency (mean_fr) and the Wind Speed (wind_speed), are used from the data. Make sure all yearly data is combined in one file!
 
 **Hybrid ARIMA-ANN Model**
